@@ -72,7 +72,7 @@ Team:
 
 Team Nexus
 
-Gargi Patra · Angel Odilo · Parth Gauniyal · Aanchal Singh
+Aanchal Singh · Gargi Patra · Parth Gauniyal · Angel Odilo
 
 Project:
 
