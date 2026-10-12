@@ -16,3 +16,15 @@ from resource_pool.object_pool import (
     PoolExhaustedError,
     ReusableUpdateBuffer,
 )
+def run_pool_demo() -> None:
+    print("=" * 72)
+    print("ConcurrentHub Phase 2 — Standalone Object Pool Demonstration")
+    print("Owner: Parth Gauniyal (Member 2)")
+    print("=" * 72)
+
+    pool: BoundedObjectPool[ReusableUpdateBuffer] = BoundedObjectPool(
+        capacity=2,
+        preallocate=True,
+    )
+    print("\n[Step 1] Initialized BoundedObjectPool with capacity=2:")
+    print(f"  -> Initial stats: {pool.get_stats()}")
