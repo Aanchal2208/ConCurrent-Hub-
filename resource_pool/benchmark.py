@@ -79,3 +79,27 @@ def run_multithreaded_pool_benchmark(
         "p99_latency_ms": round(p99, 4),
         "mean_latency_ms": round(statistics.mean(sorted_lat), 4) if sorted_lat else 0.0,
     }
+def main() -> None:
+    print("=" * 72)
+    print("ConcurrentHub Phase 2 — Resource Pool Benchmark")
+    print("Owner: Parth Gauniyal (Member 2)")
+    print("=" * 72)
+
+    single_result = measure_pool_vs_allocation(iterations=5000, capacity=16)
+    print("\n[1] Single-Thread Object Reuse vs Fresh Allocation (5,000 iterations):")
+    for k, v in single_result.items():
+        print(f"  {k:30s}: {v}")
+
+    mt_result = run_multithreaded_pool_benchmark(
+        num_threads=8,
+        ops_per_thread=500,
+        pool_capacity=8,
+    )
+    print("\n[2] Multi-Threaded Bounded Pool Contention Benchmark (8 threads x 500 ops):")
+    for k, v in mt_result.items():
+        print(f"  {k:30s}: {v}")
+    print("=" * 72)
+
+
+if _name_ == "_main_":
+    main()
