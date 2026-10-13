@@ -41,3 +41,40 @@ def test_pool_reuse_and_automatic_reset() -> None:
         assert stats["reused_acquisitions"] == 1
     finally:
         pool.close()
+
+def test_pool_capacity_exhaustion_and_unblocking() -> None:
+    """
+    When all objects are leased, acquiring with a short timeout raises PoolExhaustedError,
+    and releasing an object allows a waiting thread to succeed.
+    """
+    pool: BoundedObjectPool[ReusableUpdateBuffer] = BoundedObjectPool(
+        capacity=2,
+        preallocate=True,
+    )
+    try:
+        b1 = pool.acquire(timeout=0.5)
+        b2 = pool.acquire(timeout=0.5)
+
+        with pytest.raises(PoolExhaustedError):
+            pool.acquire(timeout=0.05)
+
+        # Release b1 from a background thread while main thread waits
+        entered_wait = threading.Event()
+
+        def delayed_release() -> None:
+            entered_wait.wait(timeout=2.0)
+            pool.release(b1)
+
+        releaser = threading.Thread(target=delayed_release)
+        releaser.start()
+        entered_wait.set()
+
+        b3 = pool.acquire(timeout=2.0)
+        releaser.join(timeout=2.0)
+        assert id(b3) == id(b1)
+
+        pool.release(b2)
+        pool.release(b3)
+    finally:
+        pool.close()
+        
