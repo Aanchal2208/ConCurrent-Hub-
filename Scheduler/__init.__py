@@ -1,0 +1,29 @@
+"""
+scheduler/__init__.py
+Owner: Aanchal Singh (Member 1)
+
+Public interface for the ConcurrentHub per-record scheduler module.
+"""
+
+from scheduler.conflict_detector import ConflictDetector, RecordContentionSnapshot
+from scheduler.scheduler import (
+    InMemoryTaskStore,
+    PerRecordScheduler,
+    UpdateRequest,
+    UpdateResult,
+    UpdateStatus,
+)
+from scheduler.version_check import VersionCheckResult, check_version_match, validate_version
+
+__all__ = [
+    "ConflictDetector",
+    "InMemoryTaskStore",
+    "PerRecordScheduler",
+    "RecordContentionSnapshot",
+    "UpdateRequest",
+    "UpdateResult",
+    "UpdateStatus",
+    "VersionCheckResult",
+    "check_version_match",
+    "validate_version",
+]
