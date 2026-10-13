@@ -47,3 +47,35 @@ def run_multithreaded_pool_benchmark(
             local_latencies.append((time.perf_counter() - t0) * 1000.0)
         with lock:
             latencies_ms.extend(local_latencies)
+                t_start = time.perf_counter()
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15.0)
+    elapsed_s = time.perf_counter() - t_start
+
+    stats = pool.get_stats()
+    pool.close()
+
+    sorted_lat = sorted(latencies_ms)
+    total_ops = len(sorted_lat)
+    p50 = sorted_lat[int(0.50 * (total_ops - 1))] if total_ops else 0.0
+    p95 = sorted_lat[int(0.95 * (total_ops - 1))] if total_ops else 0.0
+    p99 = sorted_lat[int(0.99 * (total_ops - 1))] if total_ops else 0.0
+
+    return {
+        "threads": num_threads,
+        "ops_per_thread": ops_per_thread,
+        "total_completed_ops": total_ops,
+        "pool_capacity": pool_capacity,
+        "allocated_objects": stats["allocated_objects"],
+        "reused_acquisitions": stats["reused_acquisitions"],
+        "reuse_ratio": stats["reuse_ratio"],
+        "elapsed_seconds": round(elapsed_s, 4),
+        "throughput_ops_per_sec": round(total_ops / elapsed_s, 2) if elapsed_s > 0 else 0.0,
+        "p50_latency_ms": round(p50, 4),
+        "p95_latency_ms": round(p95, 4),
+        "p99_latency_ms": round(p99, 4),
+        "mean_latency_ms": round(statistics.mean(sorted_lat), 4) if sorted_lat else 0.0,
+    }
