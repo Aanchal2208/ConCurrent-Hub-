@@ -77,4 +77,22 @@ def test_pool_capacity_exhaustion_and_unblocking() -> None:
         pool.release(b3)
     finally:
         pool.close()
-        
+    
+    def test_double_release_and_invalid_object_errors() -> None:
+    """Releasing the same object twice or releasing an external object raises explicit errors."""
+    pool: BoundedObjectPool[ReusableUpdateBuffer] = BoundedObjectPool(
+        capacity=2,
+        preallocate=True,
+    )
+    try:
+        buf = pool.acquire(timeout=0.5)
+        pool.release(buf)
+
+        with pytest.raises(PoolDoubleReleaseError):
+            pool.release(buf)
+
+        foreign = ReusableUpdateBuffer(slot_id=999)
+        with pytest.raises(PoolInvalidObjectError):
+            pool.release(foreign)
+    finally:
+        pool.close()
