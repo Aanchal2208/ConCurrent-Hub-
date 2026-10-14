@@ -181,3 +181,45 @@ class PostgresTaskRepository:
                             message="Task updated successfully",
                             task=record,
                         )
+                     # The atomic conditional UPDATE matched 0 rows (no data was changed).
+                    # Perform a follow-up read to distinguish missing record vs stale version.
+                    cur.execute(CHECK_CURRENT_VERSION_SQL, {"task_id": task_id})
+                    existing_row = cur.fetchone()
+
+                    if existing_row is None:
+                        return UpdateResult(
+                            status=UpdateStatus.NOT_FOUND,
+                            task_id=task_id,
+                            message=f"Task {task_id} not found",
+                        )
+
+                    return UpdateResult(
+                        status=UpdateStatus.VERSION_CONFLICT,
+                        task_id=task_id,
+                        current_version=int(existing_row["version"]),
+                        message="The task was modified by another request",
+                    )
+        except DatabaseUnavailableError as exc:
+            return UpdateResult(
+                status=UpdateStatus.ERROR,
+                task_id=task_id,
+                message=f"Database unavailable: {exc}",
+            )
+        except Exception as exc:
+            return UpdateResult(
+                status=UpdateStatus.ERROR,
+                task_id=task_id,
+                message=f"Database error during update: {exc}",
+            )
+
+    def handle_scheduled_update(self, request: UpdateRequest) -> UpdateResult:
+        """
+        Callback adapter allowing PerRecordScheduler to invoke this PostgreSQL
+        repository directly.
+        """
+        return self.update_task(
+            task_id=request.task_id,
+            title=request.title,
+            expected_version=request.expected_version,
+            user_id=request.user_id,
+        )
