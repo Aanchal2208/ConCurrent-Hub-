@@ -41,7 +41,7 @@ def run_pool_demo() -> None:
             )
             observed_slots.append((i, buf.slot_id, buf.reuse_count, dict(buf.metadata)))
 
-                for step, slot_id, reuse_count, meta in observed_slots:
+    for step, slot_id, reuse_count, meta in observed_slots:
         print(
             f"  -> Operation {step}: leased slot_id={slot_id}, "
             f"reuse_count={reuse_count}, metadata={meta}"
