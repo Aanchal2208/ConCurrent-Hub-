@@ -104,3 +104,80 @@ class PostgresTaskRepository:
                 record = _serialize_row(row)
                 record["user_id"] = user_id
                 return record
+
+    def get_task(self, task_id: int) -> Optional[Dict[str, Any]]:
+        """Retrieve a task by primary key id, or None if it does not exist."""
+        with self._pool_manager.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(GET_TASK_BY_ID_SQL, {"task_id": task_id})
+                row = cur.fetchone()
+                return _serialize_row(row) if row is not None else None
+
+    def list_tasks(self) -> List[Dict[str, Any]]:
+        """Return all tasks ordered by ascending id."""
+        with self._pool_manager.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(LIST_TASKS_SQL)
+                rows = cur.fetchall()
+                return [_serialize_row(r) for r in rows]
+
+    def update_task(
+        self,
+        task_id: int,
+        title: str,
+        expected_version: int,
+        user_id: str = "anonymous",
+    ) -> UpdateResult:
+        """
+        Atomically update a task's title and increment its version ONLY if its
+        current version in PostgreSQL matches expected_version.
+
+        Correctness note:
+        The UPDATE ... WHERE id = %(task_id)s AND version = %(expected_version)s
+        statement is executed atomically by PostgreSQL. Even if two connections
+        bypass the application scheduler and execute this statement concurrently,
+        PostgreSQL's row-level locking and predicate re-evaluation under READ COMMITTED
+        guarantee that at most one UPDATE matches expected_version.
+
+        If cur.fetchone() returns None, no modification occurred. We then run a
+        diagnostic SELECT to report whether the task_id does not exist (NOT_FOUND)
+        or exists with a newer version (VERSION_CONFLICT).
+        """
+        clean_title = title.strip()
+        if not clean_title:
+            return UpdateResult(
+                status=UpdateStatus.ERROR,
+                task_id=task_id,
+                message="Task title must not be empty.",
+            )
+
+        if expected_version < 1:
+            return UpdateResult(
+                status=UpdateStatus.ERROR,
+                task_id=task_id,
+                message="expected_version must be >= 1.",
+            )
+
+        try:
+            with self._pool_manager.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        CONDITIONAL_UPDATE_TASK_SQL,
+                        {
+                            "title": clean_title,
+                            "task_id": task_id,
+                            "expected_version": expected_version,
+                        },
+                    )
+                    updated_row = cur.fetchone()
+
+                    if updated_row is not None:
+                        record = _serialize_row(updated_row)
+                        record["user_id"] = user_id
+                        return UpdateResult(
+                            status=UpdateStatus.SUCCESS,
+                            task_id= int(record["id"]),
+                            new_version=int(record["version"]),
+                            message="Task updated successfully",
+                            task=record,
+                        )
