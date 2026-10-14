@@ -47,7 +47,7 @@ def run_multithreaded_pool_benchmark(
             local_latencies.append((time.perf_counter() - t0) * 1000.0)
         with lock:
             latencies_ms.extend(local_latencies)
-                t_start = time.perf_counter()
+    t_start = time.perf_counter()
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
     for t in threads:
         t.start()
@@ -101,5 +101,5 @@ def main() -> None:
     print("=" * 72)
 
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
