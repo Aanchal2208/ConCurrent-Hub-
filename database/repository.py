@@ -59,3 +59,48 @@ SELECT id, version
 FROM tasks
 WHERE id = %(task_id)s;
 """
+def _serialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a database row dictionary so timestamps are ISO-8601 strings."""
+    serialized = dict(row)
+    for key in ("created_at", "updated_at"):
+        val = serialized.get(key)
+        if isinstance(val, datetime):
+            serialized[key] = val.isoformat()
+    return serialized
+
+
+class PostgresTaskRepository:
+    """
+    Repository providing CRUD and optimistic version-checked updates backed by
+    a PostgresPoolManager.
+    """
+
+    def _init_(self, pool_manager: PostgresPoolManager) -> None:
+        self._pool_manager = pool_manager
+
+    @property
+    def pool_manager(self) -> PostgresPoolManager:
+        return self._pool_manager
+
+    def init_schema(self, schema_sql: Optional[str] = None) -> None:
+        """Create the tasks table and index using database/schema.sql."""
+        sql_text = schema_sql or SCHEMA_FILE_PATH.read_text(encoding="utf-8")
+        with self._pool_manager.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_text)
+
+    def create_task(self, title: str, user_id: str = "anonymous") -> Dict[str, Any]:
+        """Insert a new task at version 1 and return the created record."""
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Task title must not be empty.")
+
+        with self._pool_manager.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(CREATE_TASK_SQL, {"title": clean_title})
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError("INSERT INTO tasks did not return a created row.")
+                record = _serialize_row(row)
+                record["user_id"] = user_id
+                return record
