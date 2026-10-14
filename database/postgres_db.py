@@ -122,3 +122,57 @@ class PostgresPoolManager:
                     return bool(row and row.get("ok") == 1)
         except Exception:
             return False
+    @contextmanager
+    def connection(self) -> Iterator[psycopg.Connection[Any]]:
+        """
+        Borrow a pooled PostgreSQL connection within a transaction context.
+
+         Psycopg 3's pool.connection() context manager automatically:
+        - Checks out an idle connection from the pool.
+        - Commits the transaction on normal exit.
+        - Rolls back the transaction if an exception is raised inside the block.
+        - Always returns the connection to the pool in finally.
+        """
+        if self._closed:
+            raise DatabaseUnavailableError("PostgreSQL connection pool is closed.")
+        if self._pool is None:
+            self.open()
+        assert self._pool is not None
+
+        try:
+            with self._pool.connection(timeout=self.timeout) as conn:
+                yield conn
+        except PoolTimeout as exc:
+            raise DatabaseUnavailableError(
+                f"Timed out waiting for a PostgreSQL connection from pool (max_size={self.max_size})."
+            ) from exc
+        except psycopg.Error as exc:
+            raise DatabaseUnavailableError(f"PostgreSQL operational error: {exc}") from exc
+
+    def get_pool_stats(self) -> Dict[str, Any]:
+        """Return connection pool configuration and live Psycopg pool metrics."""
+        raw_stats: Dict[str, Any] = {}
+        if self._pool is not None and not self._closed:
+            try:
+                raw_stats = dict(self._pool.get_stats())
+            except Exception:
+                raw_stats = {}
+
+        return {
+            "min_size": self.min_size,
+            "max_size": self.max_size,
+            "timeout_seconds": self.timeout,
+            "is_open": self._pool is not None and not self._closed,
+            "closed": self._closed,
+            "driver": "psycopg3 + psycopg_pool",
+            "pool_metrics": raw_stats,
+        }
+
+    def close(self) -> None:
+        """Gracefully close all pooled PostgreSQL connections."""
+        self._closed = True
+        if self._pool is not None:
+            try:
+                self._pool.close()
+            finally:
+                self._pool = None
