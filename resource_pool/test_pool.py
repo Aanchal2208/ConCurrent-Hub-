@@ -79,7 +79,7 @@ def test_pool_capacity_exhaustion_and_unblocking() -> None:
         pool.close()
     
     def test_double_release_and_invalid_object_errors() -> None:
-    """Releasing the same object twice or releasing an external object raises explicit errors."""
+        """Releasing the same object twice or releasing an external object raises explicit errors."""
     pool: BoundedObjectPool[ReusableUpdateBuffer] = BoundedObjectPool(
         capacity=2,
         preallocate=True,
