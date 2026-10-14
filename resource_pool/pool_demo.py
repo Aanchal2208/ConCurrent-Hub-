@@ -77,5 +77,5 @@ def run_pool_demo() -> None:
     print("=" * 72)
 
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     run_pool_demo()
