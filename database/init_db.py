@@ -58,3 +58,7 @@ def initialize_database(seed_initial_tasks: bool = True) -> bool:
         print("[Done] Connection pool closed cleanly.")
         print("=" * 72)
 
+
+if __name__ == "__main__":
+    success = initialize_database()
+    sys.exit(0 if success else 1)
