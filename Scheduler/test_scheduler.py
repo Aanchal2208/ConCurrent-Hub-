@@ -7,17 +7,7 @@ Uses synchronization primitives (`threading.Event`, `threading.Barrier`) instead
 fragile sleep timers so tests are fast and reliable on any machine.
 """
 
-import threading
-from typing import List
 
-from scheduler.scheduler import (
-    InMemoryTaskStore,
-    PerRecordScheduler,
-    UpdateRequest,
-    UpdateResult,
-    UpdateStatus,
-)
-from scheduler.version_check import check_version_match, validate_version
 
 
 def test_version_validation_helper() -> None:
