@@ -15,7 +15,7 @@ Key DBMS guarantees:
    connections are always released even if an exception occurs.
 """
 
-from _future_ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 from database.postgres_db import DatabaseUnavailableError, PostgresPoolManager
 from scheduler.scheduler import UpdateRequest, UpdateResult, UpdateStatus
 
-SCHEMA_FILE_PATH = Path(_file_).resolve().parent / "schema.sql"
+SCHEMA_FILE_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 CREATE_TASK_SQL = """
 INSERT INTO tasks (title, version)
@@ -75,7 +75,7 @@ class PostgresTaskRepository:
     a PostgresPoolManager.
     """
 
-    def _init_(self, pool_manager: PostgresPoolManager) -> None:
+    def __init__(self, pool_manager: PostgresPoolManager) -> None:
         self._pool_manager = pool_manager
 
     @property

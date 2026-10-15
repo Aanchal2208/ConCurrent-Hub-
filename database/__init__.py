@@ -15,7 +15,7 @@ from database.repository import (
     PostgresTaskRepository,
 )
 
-_all_ = [
+__all__ = [
     "CONDITIONAL_UPDATE_TASK_SQL",
     "DatabaseUnavailableError",
     "PostgresPoolManager",

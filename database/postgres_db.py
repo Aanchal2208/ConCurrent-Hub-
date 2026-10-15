@@ -12,7 +12,7 @@ Important architectural distinction:
   resource_pool/object_pool.py, which reuses in-memory Python buffers.
 """
 
-from _future_ import annotations
+from __future__ import annotations
 
 import os
 from contextlib import contextmanager
@@ -49,7 +49,7 @@ class PostgresPoolManager:
     PostgreSQL is unavailable.
     """
 
-    def _init_(
+    def __init__(
         self,
         conninfo: Optional[str] = None,
         min_size: Optional[int] = None,
