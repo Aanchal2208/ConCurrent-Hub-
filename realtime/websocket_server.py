@@ -15,7 +15,7 @@ def create_websocket_router(manager: ConnectionManager) -> APIRouter:
         await manager.connect(websocket)
         try:
             while True:
-                # Keep connection open and listen for optional client ping/messages
+
                 message = await websocket.receive_text()
                 if message.strip().lower() == "ping":
                     await websocket.send_json({"event": "pong"})
@@ -26,4 +26,10 @@ def create_websocket_router(manager: ConnectionManager) -> APIRouter:
 
     return router
 
+def create_standalone_ws_app(manager: Optional[ConnectionManager] = None) -> FastAPI:
+    conn_manager = manager or ConnectionManager()
+    app = FastAPI(title="ConcurrentHub Standalone WebSocket Server")
+    app.state.connection_manager = conn_manager
+    app.include_router(create_websocket_router(conn_manager))
+    return app
 
