@@ -47,3 +47,34 @@ def test_event_builders_match_contract() -> None:
     assert conflict_evt["task_id"] == 101
     assert conflict_evt["current_version"] == 2
     assert conflict_evt["modified"] is False
+
+
+
+def test_websocket_connect_ping_and_multi_client_broadcast() -> None:
+    manager = ConnectionManager()
+    app = create_standalone_ws_app(manager)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws") as ws1, client.websocket_connect("/ws") as ws2:
+            assert manager.active_count == 2
+
+
+            ws1.send_text("ping")
+            assert ws1.receive_json() == {"event": "pong"}
+
+
+            event = build_task_updated_event(
+                task_id=101,
+                version=2,
+                title="Updated task",
+                user_id="user_1",
+            )
+            client.portal.call(manager.broadcast, event)  
+
+            msg1 = ws1.receive_json()
+            msg2 = ws2.receive_json()
+            assert msg1 == event
+            assert msg2 == event
+
+        assert manager.active_count == 0
+
