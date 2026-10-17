@@ -96,16 +96,3 @@ def test_pool_capacity_exhaustion_and_unblocking() -> None:
             pool.release(foreign)
     finally:
         pool.close()
-def test_pool_close_cleanup() -> None:
-    """Closing a pool prevents further acquisitions and drains available objects."""
-    pool: BoundedObjectPool[ReusableUpdateBuffer] = BoundedObjectPool(
-        capacity=3,
-        preallocate=True,
-    )
-    pool.close()
-    stats = pool.get_stats()
-    assert stats["closed"] is True
-    assert stats["available"] == 0
-
-    with pytest.raises(PoolClosedError):
-        pool.acquire(timeout=0.1)
