@@ -78,3 +78,41 @@ def test_websocket_connect_ping_and_multi_client_broadcast() -> None:
 
         assert manager.active_count == 0
 
+
+def test_disconnected_or_broken_client_is_removed_without_crashing_server() -> None:
+
+    class _HealthySocket:
+        def __init__(self) -> None:
+            self.received = []
+
+        async def accept(self) -> None:
+            pass
+
+        async def send_json(self, data: Dict[str, Any]) -> None:
+            self.received.append(data)
+
+    class _BrokenSocket:
+        async def accept(self) -> None:
+            pass
+
+        async def send_json(self, data: Dict[str, Any]) -> None:
+            raise RuntimeError("Simulated abrupt client socket reset")
+
+    async def _run() -> None:
+        manager = ConnectionManager()
+        healthy = _HealthySocket()
+        broken = _BrokenSocket()
+
+        await manager.connect(healthy)  
+        await manager.connect(broken)  
+        assert manager.active_count == 2
+
+        payload = build_task_updated_event(task_id=5, version=2, title="Resilient broadcast")
+        delivered = await manager.broadcast(payload)
+
+        assert delivered == 1
+        assert manager.active_count == 1
+        assert len(healthy.received) == 1
+        assert healthy.received[0]["title"] == "Resilient broadcast"
+
+    asyncio.run(_run())
