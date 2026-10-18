@@ -1,11 +1,4 @@
-"""
-scheduler/version_check.py
-Owner: Aanchal Singh (Member 1)
 
-Reusable optimistic concurrency control (OCC) version validation utilities.
-Used directly by the standalone in-memory scheduler store and as a shared
-domain rule alongside PostgreSQL's atomic conditional UPDATE.
-"""
 
 from dataclasses import dataclass
 from typing import Optional
