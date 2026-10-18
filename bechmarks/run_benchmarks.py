@@ -1,27 +1,3 @@
-"""
-benchmarks/run_benchmarks.py
-Project: ConcurrentHub Phase 2 — OSDBMS-V-2026-T185 (Team Nexus)
-
-Comparative benchmark evaluating:
-  1. Baseline: Direct version-checked repository updates without application-level
-     per-record scheduling.
-  2. Scheduler-Enabled: Updates routed through `PerRecordScheduler` and `BoundedObjectPool`
-     before invoking the same repository.
-
-Workloads tested (with identical request sequences for both modes):
-  - Low contention: 200 requests distributed across 50 independent records.
-  - High contention: 200 concurrent requests targeting a single hot record (Record #1).
-  - Mixed workload: 200 concurrent requests where 70% target a hot record (#1) and
-    30% target independent records (#2..#30).
-
-Note:
-- Automatically uses PostgreSQL when reachable (`PostgresTaskRepository`), or
-  clearly labels when running against `InMemoryTaskStore` if PostgreSQL is offline.
-- Never hardcodes or fabricates metrics. All reported numbers are measured live.
-
-Run command:
-    python -m benchmarks.run_benchmarks
-"""
 
 from __future__ import annotations
 
