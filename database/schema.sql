@@ -1,6 +1,3 @@
--- database/schema.sql
--- Owner: Parth Gauniyal (Member 2)
--- PostgreSQL schema for ConcurrentHub Phase 2
 
 CREATE TABLE IF NOT EXISTS tasks (
     id SERIAL PRIMARY KEY,
