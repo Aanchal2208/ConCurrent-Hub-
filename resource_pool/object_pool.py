@@ -1,18 +1,3 @@
-"""
-resource_pool/object_pool.py
-Owner: Parth Gauniyal (Member 2)
-
-Experimental BareHeap-inspired bounded, thread-safe object/buffer pool.
-
-Note on BareHeap comparison:
-- What is inspired by BareHeap: bounded capacity, pre-allocated reusable buffers,
-  explicit acquire/release lifecycle, and resetting buffers before return to
-  reduce repeated per-request object churn.
-- What is distinct: this is a safe, application-level Python object pool inside
-  CPython's managed runtime, NOT a low-level C/OS virtual-memory allocator, and
-  it is completely separate from the PostgreSQL database connection pool in
-  `database/postgres_db.py`.
-"""
 
 from __future__ import annotations
 
