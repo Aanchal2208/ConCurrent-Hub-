@@ -1,20 +1,3 @@
-"""
-database/repository.py
-Owner: Parth Gauniyal (Member 2)
-
-PostgreSQL repository layer for ConcurrentHub tasks.
-
-Key DBMS guarantees:
-1. All SQL statements use parameterized queries (%(param)s) — never raw string formatting.
-2. Version-checked updates use a single atomic UPDATE ... WHERE id = %(task_id)s AND version = %(expected_version)s RETURNING ... statement.
-3. The atomic conditional UPDATE is the true correctness guarantee against lost updates.
-   When 0 rows are returned, a follow-up SELECT is executed solely to distinguish
-   NOT_FOUND (missing record) from VERSION_CONFLICT (stale expected version)
-   for accurate error reporting.
-4. Pooled connections and transactions are managed via context managers so locks and
-   connections are always released even if an exception occurs.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime
