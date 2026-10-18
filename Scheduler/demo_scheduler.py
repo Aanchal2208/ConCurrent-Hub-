@@ -1,13 +1,3 @@
-"""
-scheduler/demo_scheduler.py
-Owner: Aanchal Singh (Member 1)
-
-Standalone demonstration of the ConcurrentHub per-record scheduler.
-Runs completely without PostgreSQL using `InMemoryTaskStore`.
-
-Run command:
-    python -m scheduler.demo_scheduler
-"""
 
 import threading
 from typing import List
