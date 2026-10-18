@@ -1,17 +1,3 @@
-"""
-database/postgres_db.py
-Owner: Parth Gauniyal (Member 2)
-
-PostgreSQL connection pool manager built on Psycopg 3 (psycopg and psycopg_pool).
-
-Important architectural distinction:
-- This module manages a pool of persistent PostgreSQL network connections
-  (psycopg_pool.ConnectionPool) to avoid TCP/authentication handshake overhead
-  on every query.
-- It is completely separate from the application-level BoundedObjectPool in
-  resource_pool/object_pool.py, which reuses in-memory Python buffers.
-"""
-
 from __future__ import annotations
 
 import os
