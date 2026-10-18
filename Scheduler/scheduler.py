@@ -1,19 +1,4 @@
-"""
-scheduler/scheduler.py
-Owner: Aanchal Singh (Member 1)
 
-Application-level, MxTasks-inspired per-record FIFO update scheduler.
-
-Key properties:
-1. Maintains a dedicated FIFO queue (`queue.Queue`) per active `task_id`.
-2. Serializes conflicting updates targeting the same `task_id` in strict arrival order.
-3. Dispatches independent `task_id` queues concurrently across worker threads.
-4. Validates optimistic versions via `validate_version` in standalone mode or
-   delegates to the PostgreSQL repository callback in integrated mode.
-5. Never silently drops accepted requests; every request resolves its Future with
-   an explicit `UpdateResult`.
-6. Supports safe read-only queue inspection and graceful worker shutdown.
-"""
 
 from __future__ import annotations
 
