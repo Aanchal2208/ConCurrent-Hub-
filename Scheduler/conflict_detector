@@ -1,11 +1,4 @@
-"""
-scheduler/conflict_detector.py
-Owner: Aanchal Singh (Member 1)
 
-Tracks per-record contention and version-conflict statistics across record queues.
-Provides immutable snapshots so callers can inspect contention without mutating
-internal scheduler state.
-"""
 
 import threading
 from dataclasses import dataclass
