@@ -1,18 +1,3 @@
-"""
-database/test_database.py
-Owner: Parth Gauniyal (Member 2)
-
-Automated tests for the PostgreSQL repository and connection pool.
-
-Important:
-- Live PostgreSQL integration tests explicitly check whether PostgreSQL is reachable.
-- When PostgreSQL is unavailable (e.g., Docker is not running), those tests are
-  reported as `SKIPPED` (never falsely passed).
-- Unit tests at the top of this file verify parameterized SQL generation,
-  conditional update conflict vs missing-record handling, and connection-release
-  guarantees without requiring a live PostgreSQL server.
-"""
-
 from __future__ import annotations
 
 import threading
