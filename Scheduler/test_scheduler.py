@@ -1,11 +1,3 @@
-"""
-scheduler/test_scheduler.py
-Owner: Aanchal Singh (Member 1)
-
-Deterministic unit tests for the per-record FIFO scheduler and optimistic version checker.
-Uses synchronization primitives (`threading.Event`, `threading.Barrier`) instead of
-fragile sleep timers so tests are fast and reliable on any machine.
-"""
 
 import threading
 from typing import List
