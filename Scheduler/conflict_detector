@@ -1,4 +1,7 @@
-
+"""
+Tracks queue activity, contention, successful updates, and version conflicts.
+OS & DBMS Phase 2 (Team Nexus - OSDBMS-V-2026-T185)
+"""
 
 import threading
 from dataclasses import dataclass
@@ -31,38 +34,44 @@ class ConflictDetector:
         self._version_conflicts: Dict[int, int] = {}
         self._successful_updates: Dict[int, int] = {}
 
-    def record_enqueue(self, task_id: int, current_queue_depth: int) -> bool:
+    def record_enqueue(
+        self,
+        task_id: int,
+        current_queue_depth: int = 1,
+        queue_depth: Optional[int] = None,
+    ) -> bool:
         """
         Record an incoming update for `task_id`.
         Returns True if the update arrived while another update for the same
         record was already in-flight or queued (i.e., contention occurred).
         """
+        depth = queue_depth if queue_depth is not None else current_queue_depth
         with self._lock:
             self._enqueued_total[task_id] = self._enqueued_total.get(task_id, 0) + 1
-            is_contended = current_queue_depth > 1
+            is_contended = depth > 1
             if is_contended:
                 self._contended_enqueues[task_id] = (
                     self._contended_enqueues.get(task_id, 0) + 1
                 )
-            prev_peak = self._peak_depth.get(task_id, 0)
-            if current_queue_depth > prev_peak:
-                self._peak_depth[task_id] = current_queue_depth
+            current_peak = self._peak_depth.get(task_id, 0)
+            if depth > current_peak:
+                self._peak_depth[task_id] = depth
             return is_contended
 
-    def record_outcome(self, task_id: int, status: str) -> None:
-        """Record the completion status of a scheduled request."""
+    def record_outcome(self, task_id: int, is_conflict: bool, is_success: bool) -> None:
+        """Record whether an update ended in success, version conflict, or failure."""
         with self._lock:
-            if status == "SUCCESS":
-                self._successful_updates[task_id] = (
-                    self._successful_updates.get(task_id, 0) + 1
-                )
-            elif status == "VERSION_CONFLICT":
+            if is_conflict:
                 self._version_conflicts[task_id] = (
                     self._version_conflicts.get(task_id, 0) + 1
                 )
+            if is_success:
+                self._successful_updates[task_id] = (
+                    self._successful_updates.get(task_id, 0) + 1
+                )
 
-    def get_record_snapshot(self, task_id: int) -> RecordContentionSnapshot:
-        """Return an immutable snapshot of metrics for one task_id."""
+    def get_snapshot(self, task_id: int) -> RecordContentionSnapshot:
+        """Return an immutable snapshot of metrics for a specific `task_id`."""
         with self._lock:
             return RecordContentionSnapshot(
                 task_id=task_id,
@@ -73,24 +82,41 @@ class ConflictDetector:
                 successful_updates=self._successful_updates.get(task_id, 0),
             )
 
-    def get_summary_snapshot(self) -> Dict[str, object]:
-        """Return an immutable dictionary summarizing contention across all records."""
+    def get_record_stats(self, task_id: int) -> Dict[str, int]:
+        """Return a dictionary of metrics for a specific `task_id`."""
+        snap = self.get_snapshot(task_id)
+        return {
+            "task_id": snap.task_id,
+            "total_enqueued": snap.enqueued_total,
+            "contended_enqueues": snap.contended_enqueues,
+            "peak_queue_depth": snap.peak_queue_depth,
+            "version_conflicts": snap.version_conflicts,
+            "successful_updates": snap.successful_updates,
+        }
+
+    def get_global_summary(self) -> Dict[str, object]:
+        """Return aggregated summary metrics across all records."""
         with self._lock:
+            records_seen = len(self._enqueued_total)
+            total_enqueued = sum(self._enqueued_total.values())
+            total_contended = sum(self._contended_enqueues.values())
+            total_conflicts = sum(self._version_conflicts.values())
+            total_success = sum(self._successful_updates.values())
             per_record = {
-                task_id: {
-                    "enqueued_total": self._enqueued_total.get(task_id, 0),
-                    "contended_enqueues": self._contended_enqueues.get(task_id, 0),
-                    "peak_queue_depth": self._peak_depth.get(task_id, 0),
-                    "version_conflicts": self._version_conflicts.get(task_id, 0),
-                    "successful_updates": self._successful_updates.get(task_id, 0),
+                tid: {
+                    "enqueued_total": self._enqueued_total.get(tid, 0),
+                    "contended_enqueues": self._contended_enqueues.get(tid, 0),
+                    "peak_queue_depth": self._peak_depth.get(tid, 0),
+                    "version_conflicts": self._version_conflicts.get(tid, 0),
+                    "successful_updates": self._successful_updates.get(tid, 0),
                 }
-                for task_id in sorted(self._enqueued_total.keys())
+                for tid in self._enqueued_total
             }
             return {
-                "total_records_seen": len(self._enqueued_total),
-                "total_enqueued": sum(self._enqueued_total.values()),
-                "total_contended_enqueues": sum(self._contended_enqueues.values()),
-                "total_version_conflicts": sum(self._version_conflicts.values()),
-                "total_successful_updates": sum(self._successful_updates.values()),
+                "total_records_seen": records_seen,
+                "total_enqueued": total_enqueued,
+                "total_contended_enqueues": total_contended,
+                "total_version_conflicts": total_conflicts,
+                "total_successful_updates": total_success,
                 "per_record": per_record,
             }
