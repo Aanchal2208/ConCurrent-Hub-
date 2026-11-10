@@ -1,6 +1,6 @@
 """
 Tracks queue activity, contention, successful updates, and version conflicts.
-OS & DBMS Phase 2 (Team Nexus - OSDBMS-V-2026-T185)
+OS & DBMS Phase 3 (Team Nexus - OSDBMS-V-2026-T185)
 """
 
 import threading
