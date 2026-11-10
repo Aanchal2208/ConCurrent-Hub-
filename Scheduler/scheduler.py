@@ -1,6 +1,6 @@
 """
 Application-level, MxTasks-inspired per-record FIFO update scheduler.
-OS & DBMS Phase 2 (Team Nexus - OSDBMS-V-2026-T185)
+OS & DBMS Phase 3 (Team Nexus - OSDBMS-V-2026-T185)
 
 Key properties:
 1. Maintains a dedicated FIFO queue (`queue.Queue`) per active `task_id`.
