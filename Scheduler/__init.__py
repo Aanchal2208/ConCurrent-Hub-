@@ -1,4 +1,4 @@
-
+"""Scheduler package for ConcurrentHub."""
 from scheduler.conflict_detector import ConflictDetector, RecordContentionSnapshot
 from scheduler.scheduler import (
     InMemoryTaskStore,
