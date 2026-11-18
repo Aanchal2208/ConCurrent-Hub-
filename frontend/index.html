@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ConcurrentHub</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ============================================================
+       LOGIN PAGE
+       ============================================================ -->
+  <div id="auth-page" class="page">
+         <aside class="auth-story">
+           <p class="eyebrow">ConcurrentHub <span aria-hidden="true">/</span> Team workspace</p>
+           <h1>Shared work,<br /><span>kept in sync.</span></h1>
+           <p class="auth-story-copy">
+             Coordinate tasks and keep edits consistent while your team works in parallel.
+           </p>
+           <div class="sync-flow" aria-label="How ConcurrentHub keeps work in sync">
+             <div class="sync-step">
+               <span class="sync-step-number">01</span>
+               <span class="sync-step-label">Work from one shared task list</span>
+             </div>
+             <div class="sync-step">
+               <span class="sync-step-number">02</span>
+               <span class="sync-step-label">Check each edit against its version</span>
+             </div>
+             <div class="sync-step">
+               <span class="sync-step-number">03</span>
+               <span class="sync-step-label">See changes arrive in real time</span>
+             </div>
+           </div>
+           <p class="auth-story-foot">PostgreSQL-backed · Built for teams</p>
+         </aside>
+
+         <div class="auth-card">
+           <div class="auth-logo">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="40" height="40" rx="10" fill="#3E6553"/>
+          <circle cx="14" cy="20" r="4" fill="#FAF8F5"/>
+          <circle cx="26" cy="14" r="4" fill="#FAF8F5" opacity="0.7"/>
+          <circle cx="26" cy="26" r="4" fill="#FAF8F5" opacity="0.7"/>
+          <line x1="18" y1="18" x2="23" y2="15" stroke="#FAF8F5" stroke-width="1.5"/>
+          <line x1="18" y1="22" x2="23" y2="25" stroke="#FAF8F5" stroke-width="1.5"/>
+        </svg>
+        <span>ConcurrentHub</span>
+      </div>
+      <p class="auth-card-intro">Sign in to your workspace</p>
+
+      <div class="auth-tabs">
+        <button class="tab-btn active" data-tab="login">Sign In</button>
+        <button class="tab-btn" data-tab="register">Register</button>
+      </div>
+
+      <!-- Login form -->
+      <form id="login-form" class="auth-form">
+        <div class="field-group">
+          <label for="login-username">Username</label>
+          <input id="login-username" type="text" placeholder="your_username" autocomplete="username" required />
+        </div>
+        <div class="field-group">
+          <label for="login-password">Password</label>
+          <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password" required />
+        </div>
+        <button type="submit" class="btn btn-primary btn-full">Sign In</button>
+        <p id="login-error" class="form-error hidden"></p>
+      </form>
+
+      <!-- Register form -->
+      <form id="register-form" class="auth-form hidden">
+        <div class="field-group">
+          <label for="reg-username">Username</label>
+          <input id="reg-username" type="text" placeholder="choose_a_username" autocomplete="username" required />
+        </div>
+        <div class="field-group">
+          <label for="reg-email">Email</label>
+          <input id="reg-email" type="email" placeholder="you@example.com" autocomplete="email" required />
+        </div>
+        <div class="field-group">
+          <label for="reg-fullname">Full Name</label>
+          <input id="reg-fullname" type="text" placeholder="Your Name" autocomplete="name" />
+        </div>
+        <div class="field-group">
+          <label for="reg-password">Password <span class="hint">(min 8 characters)</span></label>
+          <input id="reg-password" type="password" placeholder="••••••••" autocomplete="new-password" required />
+        </div>
+        <div class="field-group">
+          <label for="reg-role">Role</label>
+          <select id="reg-role">
+            <option value="editor">Editor</option>
+            <option value="viewer">Viewer</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full">Create Account</button>
+        <p id="register-error" class="form-error hidden"></p>
+        <p id="register-success" class="form-success hidden"></p>
+      </form>
+
+      <div class="auth-footer">
+        <button type="button" class="about-link" id="open-about-dialog" aria-haspopup="dialog">
+          About ConcurrentHub
+        </button>
+        <p>OS &amp; DBMS Project — Team Nexus</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="about-dialog" class="modal-overlay hidden" role="dialog" aria-modal="true"
+       aria-labelledby="about-title" aria-describedby="about-description" tabindex="-1">
+    <section class="modal-card about-card">
+      <div class="modal-header">
+        <h3 id="about-title">A better way to work together</h3>
+        <button type="button" class="modal-close" id="close-about-dialog"
+                aria-label="Close About ConcurrentHub">&times;</button>
+      </div>
+      <div class="about-content">
+        <div class="about-brand">
+          <span class="about-brand-mark" aria-hidden="true">
+            <svg width="32" height="32" viewBox="0 0 40 40" fill="none">
+              <rect width="40" height="40" rx="10" fill="#3E6553"/>
+              <circle cx="14" cy="20" r="4" fill="#FAF8F5"/>
+              <circle cx="26" cy="14" r="4" fill="#FAF8F5" opacity=".7"/>
+              <circle cx="26" cy="26" r="4" fill="#FAF8F5" opacity=".7"/>
+              <path d="m18 18 5-3m-5 7 5 3" stroke="#FAF8F5" stroke-width="1.5"/>
+            </svg>
+          </span>
+          <span>ConcurrentHub</span>
+        </div>
+        <p id="about-description" class="about-intro">
+          A shared task hub that helps teams stay in sync, see progress, and make
+          changes confidently—even when several people are working at once.
+        </p>
+        <div class="about-highlights">
+          <article class="about-highlight">
+            <span class="about-highlight-icon" aria-hidden="true">↗</span>
+            <div>
+              <h4>Work in real time</h4>
+              <p>Live updates keep teammates’ task lists and activity in sync.</p>
+            </div>
+          </article>
+          <article class="about-highlight">
+            <span class="about-highlight-icon" aria-hidden="true">✓</span>
+            <div>
+              <h4>Prevent conflicting edits</h4>
+              <p>Version checks catch stale changes before they overwrite newer work.</p>
+            </div>
+          </article>
+          <article class="about-highlight">
+            <span class="about-highlight-icon" aria-hidden="true">▤</span>
+            <div>
+              <h4>Keep work organized</h4>
+              <p>Create, assign, filter, and track tasks in one collaborative space.</p>
+            </div>
+          </article>
+        </div>
+        <div class="about-project">
+          <span class="about-project-label">Built as an OS &amp; DBMS project</span>
+          <span>Team Nexus · PostgreSQL · FastAPI</span>
+        </div>
+        <button type="button" class="btn btn-primary btn-full" id="about-done">
+          Sounds good
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================================================
+       MAIN APPLICATION
+       ============================================================ -->
+  <div id="app-page" class="page hidden">
+
+    <!-- ── Topbar ── -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <svg class="topbar-icon" width="26" height="26" viewBox="0 0 40 40" fill="none">
+          <rect width="40" height="40" rx="10" fill="#3E6553"/>
+          <circle cx="14" cy="20" r="4" fill="#FAF8F5"/>
+          <circle cx="26" cy="14" r="4" fill="#FAF8F5" opacity="0.7"/>
+          <circle cx="26" cy="26" r="4" fill="#FAF8F5" opacity="0.7"/>
+          <line x1="18" y1="18" x2="23" y2="15" stroke="#FAF8F5" stroke-width="1.5"/>
+          <line x1="18" y1="22" x2="23" y2="25" stroke="#FAF8F5" stroke-width="1.5"/>
+        </svg>
+        <h1 class="app-title">ConcurrentHub</h1>
+        <span class="storage-badge" id="storage-badge">PostgreSQL</span>
+      </div>
+      <div class="topbar-right">
+        <span class="ws-dot" id="ws-dot" title="WebSocket" aria-label="Live connection status"></span>
+        <span class="user-name" id="topbar-username">…</span>
+        <button class="btn btn-ghost btn-sm" id="logout-btn">Sign Out</button>
+      </div>
+    </header>
+
+    <!-- ── Main layout ── -->
+    <main class="main-layout">
+      <div class="workspace-heading">
+        <div>
+          <p class="eyebrow">Team workspace</p>
+          <h2>Shared task board</h2>
+        </div>
+        <p>Tasks and live changes, together in one place.</p>
+      </div>
+
+      <!-- Left panel: Tasks -->
+      <section class="panel tasks-panel">
+        <div class="panel-header">
+          <h2>Tasks <span class="section-note">Shared list</span></h2>
+          <div class="panel-actions">
+            <button class="btn btn-sm btn-outline" id="refresh-btn">Refresh</button>
+            <button class="btn btn-sm btn-primary" id="open-create-modal">New task</button>
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters">
+          <label class="sr-only" for="search-input">Search tasks</label>
+          <input id="search-input" type="text" placeholder="Search tasks" class="filter-input" />
+          <label class="sr-only" for="filter-status">Filter by status</label>
+          <select id="filter-status" class="filter-select">
+            <option value="">All Statuses</option>
+            <option value="TODO">To Do</option>
+            <option value="IN_PROGRESS">In Progress</option>
+            <option value="REVIEW">Review</option>
+            <option value="DONE">Done</option>
+          </select>
+          <label class="sr-only" for="filter-priority">Filter by priority</label>
+          <select id="filter-priority" class="filter-select">
+            <option value="">All Priorities</option>
+            <option value="CRITICAL">Critical</option>
+            <option value="HIGH">High</option>
+            <option value="MEDIUM">Medium</option>
+            <option value="LOW">Low</option>
+          </select>
+        </div>
+
+        <div id="tasks-list" class="tasks-list">
+          <div class="empty-state">Loading tasks…</div>
+        </div>
+      </section>
+
+      <!-- Right panel: Live Activity -->
+      <aside class="panel activity-panel">
+        <div class="panel-header">
+          <h2>Live activity</h2>
+          <button class="btn btn-ghost btn-sm" id="clear-activity-btn">Clear</button>
+        </div>
+        <ul id="activity-feed" class="activity-feed"></ul>
+
+        <!-- System Metrics (collapsible) -->
+        <details class="metrics-details" id="metrics-details">
+          <summary class="metrics-toggle">System Metrics</summary>
+          <div class="metrics-grid" id="metrics-grid">
+            <div class="metric-cell"><span class="metric-label">Storage</span><span class="metric-val" id="m-storage">—</span></div>
+            <div class="metric-cell"><span class="metric-label">WS Clients</span><span class="metric-val" id="m-ws">—</span></div>
+            <div class="metric-cell"><span class="metric-label">Pool Capacity</span><span class="metric-val" id="m-pool-cap">—</span></div>
+            <div class="metric-cell"><span class="metric-label">Pool In Use</span><span class="metric-val" id="m-pool-use">—</span></div>
+            <div class="metric-cell"><span class="metric-label">Pool Reuse %</span><span class="metric-val" id="m-pool-reuse">—</span></div>
+            <div class="metric-cell"><span class="metric-label">Scheduler Queues</span><span class="metric-val" id="m-sched-q">—</span></div>
+          </div>
+          <button class="btn btn-sm btn-outline mt-s" id="refresh-metrics-btn">Refresh Metrics</button>
+        </details>
+      </aside>
+    </main>
+  </div>
+
+  <!-- ============================================================
+       CREATE TASK MODAL
+       ============================================================ -->
+  <div id="create-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>New Task</h3>
+        <button class="modal-close" id="close-create-modal">&times;</button>
+      </div>
+      <form id="create-task-form">
+        <div class="field-group">
+          <label for="ct-title">Title <span class="required">*</span></label>
+          <input id="ct-title" type="text" placeholder="Task title" required />
+        </div>
+        <div class="field-group">
+          <label for="ct-description">Description</label>
+          <textarea id="ct-description" rows="3" placeholder="What needs to be done?"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="field-group">
+            <label for="ct-status">Status</label>
+            <select id="ct-status">
+              <option value="TODO">To Do</option>
+              <option value="IN_PROGRESS">In Progress</option>
+              <option value="REVIEW">Review</option>
+              <option value="DONE">Done</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label for="ct-priority">Priority</label>
+            <select id="ct-priority">
+              <option value="MEDIUM">Medium</option>
+              <option value="LOW">Low</option>
+              <option value="HIGH">High</option>
+              <option value="CRITICAL">Critical</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-group">
+          <label for="ct-assignee">Assignee</label>
+          <input id="ct-assignee" type="text" placeholder="username or name" />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" id="cancel-create-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Task</button>
+        </div>
+        <p id="create-error" class="form-error hidden"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       EDIT TASK MODAL
+       ============================================================ -->
+  <div id="edit-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Edit Task <span id="edit-task-id-label" class="id-label"></span></h3>
+        <button class="modal-close" id="close-edit-modal">&times;</button>
+      </div>
+      <p class="version-info" id="edit-version-info"></p>
+      <form id="edit-task-form">
+        <input type="hidden" id="et-task-id" />
+        <input type="hidden" id="et-expected-version" />
+        <div class="field-group">
+          <label for="et-title">Title <span class="required">*</span></label>
+          <input id="et-title" type="text" required />
+        </div>
+        <div class="field-group">
+          <label for="et-description">Description</label>
+          <textarea id="et-description" rows="3"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="field-group">
+            <label for="et-status">Status</label>
+            <select id="et-status">
+              <option value="TODO">To Do</option>
+              <option value="IN_PROGRESS">In Progress</option>
+              <option value="REVIEW">Review</option>
+              <option value="DONE">Done</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label for="et-priority">Priority</label>
+            <select id="et-priority">
+              <option value="LOW">Low</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="HIGH">High</option>
+              <option value="CRITICAL">Critical</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-group">
+          <label for="et-assignee">Assignee</label>
+          <input id="et-assignee" type="text" />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-danger btn-sm" id="delete-task-btn">Delete</button>
+          <div style="flex:1"></div>
+          <button type="button" class="btn btn-ghost" id="cancel-edit-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+        <p id="edit-error" class="form-error hidden"></p>
+        <p id="edit-success" class="form-success hidden"></p>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
