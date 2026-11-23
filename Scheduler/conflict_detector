@@ -1,7 +1,4 @@
-"""
-Tracks queue activity, contention, successful updates, and version conflicts.
-OS & DBMS Phase 3 (Team Nexus - OSDBMS-V-2026-T185)
-"""
+
 
 import threading
 from dataclasses import dataclass
