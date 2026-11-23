@@ -1,3 +1,16 @@
+"""
+Experimental BareHeap-inspired bounded, thread-safe object/buffer pool.
+OS & DBMS Phase 2 (Team Nexus - OSDBMS-V-2026-T185)
+
+Note on BareHeap comparison:
+- What is inspired by BareHeap: bounded capacity, pre-allocated reusable buffers,
+  explicit acquire/release lifecycle, and resetting buffers before return to
+  reduce repeated per-request object churn.
+- What is distinct: this is a safe, application-level Python object pool inside
+  CPython's managed runtime, NOT a low-level C/OS virtual-memory allocator, and
+  it is completely separate from the PostgreSQL database connection pool in
+  `database/postgres_db.py`.
+"""
 
 from __future__ import annotations
 
@@ -16,15 +29,15 @@ class PoolError(Exception):
 
 
 class PoolExhaustedError(PoolError):
-    """Raised when no pooled object becomes available before the timeout expires."""
+    """Raised when no pooled object becomes available before timeout."""
 
 
 class PoolDoubleReleaseError(PoolError):
-    """Raised when an caller attempts to release an object that is already in the pool."""
+    """Raised when releasing an object already in the pool."""
 
 
 class PoolInvalidObjectError(PoolError):
-    """Raised when a caller attempts to release an object that did not originate from this pool."""
+    """Raised when releasing an object that did not originate from this pool."""
 
 
 class PoolClosedError(PoolError):
@@ -39,34 +52,48 @@ class ReusableUpdateBuffer:
     """
 
     slot_id: int
-    payload: bytearray = field(default_factory=lambda: bytearray(256))
+    payload: bytearray = field(default_factory=lambda: bytearray(512))
     metadata: Dict[str, Any] = field(default_factory=dict)
     reuse_count: int = 0
+    is_active: bool = False
 
-    def write_update(self, task_id: int, expected_version: int, title: str, user_id: str) -> None:
+    def write_update(
+        self,
+        task_id: int,
+        expected_version: int,
+        title: Optional[str],
+        description: Optional[str] = None,
+        status: Optional[str] = None,
+        priority: Optional[str] = None,
+        assignee: Optional[str] = None,
+        user_id: str = "anonymous",
+    ) -> None:
         """Populate buffer metadata and encoded title bytes."""
         self.metadata["task_id"] = task_id
         self.metadata["expected_version"] = expected_version
         self.metadata["title"] = title
+        self.metadata["description"] = description
+        self.metadata["status"] = status
+        self.metadata["priority"] = priority
+        self.metadata["assignee"] = assignee
         self.metadata["user_id"] = user_id
-        encoded = title.encode("utf-8")[: len(self.payload)]
+        encoded = (title or "").encode("utf-8")[: len(self.payload)]
         self.payload[: len(encoded)] = encoded
+        self.is_active = True
 
     def reset(self) -> None:
-        """Clear sensitive/request-specific state before returning to the free list."""
+        """Clear sensitive/request-specific state before returning to free list."""
         self.metadata.clear()
+        self.metadata["task_id"] = None
         self.payload[:] = b"\x00" * len(self.payload)
+        self.is_active = False
 
 
 class BoundedObjectPool(Generic[T]):
     """
     Thread-safe bounded pool of reusable objects.
-
-    Features:
-    - Pre-allocates up to `capacity` objects (or allocates on demand up to `capacity`).
-    - Tracks leased objects by `id(obj)` to prevent double-release and foreign-object release bugs.
-    - Invokes `reset_fn(obj)` automatically when an object is released back to the pool.
-    - Exposes read-only metrics for reuse rate and contention inspection.
+    Pre-allocates up to `capacity` objects, tracks leased objects by id(obj),
+    and enforces explicit acquire/release lifecycles.
     """
 
     def __init__(
@@ -107,17 +134,24 @@ class BoundedObjectPool(Generic[T]):
     def capacity(self) -> int:
         return self._capacity
 
+    @property
+    def available(self) -> int:
+        return self._free_queue.qsize()
+
+    @property
+    def in_use(self) -> int:
+        with self._lock:
+            return len(self._in_use_ids)
+
     def acquire(self, timeout: Optional[float] = 2.0) -> T:
         """
         Acquire an object from the bounded pool.
-        Raises `PoolExhaustedError` if the pool is at capacity and no object is
-        returned within `timeout` seconds.
+        Raises `PoolExhaustedError` if no object becomes available within timeout.
         """
         with self._lock:
             if self._closed:
                 raise PoolClosedError("Cannot acquire from a closed BoundedObjectPool.")
 
-            # If not preallocated and under capacity, try free queue first, else allocate
             if self._free_queue.empty() and self._allocated_count < self._capacity:
                 slot = self._allocated_count
                 obj = self._factory(slot)
@@ -129,7 +163,6 @@ class BoundedObjectPool(Generic[T]):
                 self._total_acquisitions += 1
                 return obj
 
-        # Wait on the bounded queue
         block = timeout is None or timeout > 0
         try:
             obj = self._free_queue.get(block=block, timeout=timeout)
@@ -140,7 +173,6 @@ class BoundedObjectPool(Generic[T]):
 
         with self._lock:
             if self._closed:
-                # Return immediately if closed while waiting
                 self._free_queue.put_nowait(obj)
                 raise PoolClosedError("Cannot acquire from a closed BoundedObjectPool.")
 
@@ -157,10 +189,7 @@ class BoundedObjectPool(Generic[T]):
         return obj
 
     def release(self, obj: T) -> None:
-        """
-        Reset and return a borrowed object back to the pool.
-        Prevents double-release and foreign-object errors.
-        """
+        """Reset and return a borrowed object back to the pool."""
         obj_id = id(obj)
         with self._lock:
             if obj_id not in self._all_object_ids:
@@ -172,7 +201,6 @@ class BoundedObjectPool(Generic[T]):
                     "Attempted to release an object that is already in the pool (double release)."
                 )
 
-            # Reset object state before making it available to other threads
             if self._reset_fn is not None:
                 self._reset_fn(obj)
             elif hasattr(obj, "reset") and callable(getattr(obj, "reset")):
@@ -184,7 +212,7 @@ class BoundedObjectPool(Generic[T]):
 
     @contextmanager
     def lease(self, timeout: Optional[float] = 2.0) -> Iterator[T]:
-        """Context manager that guarantees `release()` even when an exception occurs."""
+        """Context manager that guarantees `release()` in finally."""
         obj = self.acquire(timeout=timeout)
         try:
             yield obj
@@ -192,7 +220,7 @@ class BoundedObjectPool(Generic[T]):
             self.release(obj)
 
     def get_stats(self) -> Dict[str, Any]:
-        """Return an immutable snapshot of pool capacity, usage, and reuse statistics."""
+        """Return an immutable snapshot of pool metrics."""
         with self._lock:
             in_use = len(self._in_use_ids)
             available = self._free_queue.qsize()
@@ -207,11 +235,14 @@ class BoundedObjectPool(Generic[T]):
                 "total_acquisitions": total_acq,
                 "reused_acquisitions": reused_acq,
                 "reuse_ratio": round(reuse_ratio, 4),
+                "total_leases": total_acq,
+                "total_reuses": reused_acq,
+                "reuse_ratio_pct": round(reuse_ratio * 100, 2),
                 "closed": self._closed,
             }
 
     def close(self) -> None:
-        """Mark the pool as closed and drain idle objects."""
+        """Mark pool as closed and drain idle objects."""
         with self._lock:
             self._closed = True
             while not self._free_queue.empty():
@@ -222,10 +253,7 @@ class BoundedObjectPool(Generic[T]):
 
 
 def measure_pool_vs_allocation(iterations: int = 5000, capacity: int = 16) -> Dict[str, Any]:
-    """
-    Compare acquiring/releasing pre-allocated `ReusableUpdateBuffer` instances
-    against allocating a fresh `ReusableUpdateBuffer` on every iteration.
-    """
+    """Compare acquiring/releasing pre-allocated buffers vs fresh object allocation."""
     pool: BoundedObjectPool[ReusableUpdateBuffer] = BoundedObjectPool(
         capacity=capacity,
         preallocate=True,
@@ -239,11 +267,9 @@ def measure_pool_vs_allocation(iterations: int = 5000, capacity: int = 16) -> Di
     stats = pool.get_stats()
     pool.close()
 
-    distinct_fresh_ids: Set[int] = set()
     t1 = time.perf_counter()
     for i in range(iterations):
         fresh = ReusableUpdateBuffer(slot_id=i)
-        distinct_fresh_ids.add(id(fresh))
         fresh.write_update(task_id=1, expected_version=i + 1, title="Benchmark Task", user_id="u1")
         fresh.reset()
     unpooled_elapsed = time.perf_counter() - t1
@@ -255,5 +281,5 @@ def measure_pool_vs_allocation(iterations: int = 5000, capacity: int = 16) -> Di
         "unpooled_seconds": round(unpooled_elapsed, 6),
         "pooled_objects_allocated": stats["allocated_objects"],
         "pooled_reused_acquisitions": stats["reused_acquisitions"],
-        "unpooled_objects_Created": iterations,
+        "unpooled_objects_created": iterations,
     }
