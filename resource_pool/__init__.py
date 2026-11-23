@@ -1,5 +1,4 @@
-
-
+"""Resource pool package for ConcurrentHub."""
 from resource_pool.object_pool import (
     BoundedObjectPool,
     PoolClosedError,
@@ -11,7 +10,7 @@ from resource_pool.object_pool import (
     measure_pool_vs_allocation,
 )
 
-_all_ = [
+__all__ = [
     "BoundedObjectPool",
     "PoolClosedError",
     "PoolDoubleReleaseError",

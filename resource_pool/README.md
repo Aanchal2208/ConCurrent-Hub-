@@ -1,4 +1,4 @@
-# Module 2A: BareHeap-Inspired Object Pool (`resource_pool/`)
+ # Module 2A: BareHeap-Inspired Object Pool (`resource_pool/`)
 
 **Owner:** Parth Gauniyal (Member 2)  
 **Project:** ConcurrentHub — OSDBMS-V-2026-T185 (Team Nexus)
