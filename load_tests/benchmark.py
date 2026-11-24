@@ -137,3 +137,42 @@ class ApiClient:
             )
         return response.payload
 
+@dataclass
+class Metrics:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    done: int = 0
+    ok: int = 0
+    conf: int = 0
+    fail: int = 0
+    latencies_ms: list[float] = field(default_factory=list)
+    failure_samples: list[str] = field(default_factory=list)
+
+    def record(self, outcome: str, elapsed_ms: float, detail: Optional[str] = None) -> None:
+        with self.lock:
+            self.done += 1
+            if outcome == "ok":
+                self.ok += 1
+            elif outcome == "conf":
+                self.conf += 1
+            else:
+                self.fail += 1
+                if detail and len(self.failure_samples) < 20:
+                    self.failure_samples.append(detail)
+            self.latencies_ms.append(elapsed_ms)
+
+    def snapshot(self, elapsed_seconds: float, rss_mb: float) -> dict[str, Any]:
+        values = sorted(self.latencies_ms)
+        return {
+            "done": self.done,
+            "ok": self.ok,
+            "conf": self.conf,
+            "fail": self.fail,
+            "req_per_sec": self.done / elapsed_seconds if elapsed_seconds else 0.0,
+            "successful_ops_per_sec": self.ok / elapsed_seconds if elapsed_seconds else 0.0,
+            "p50_ms": percentile(values, 0.50),
+            "p95_ms": percentile(values, 0.95),
+            "p99_ms": percentile(values, 0.99),
+            "rss_mb": rss_mb,
+            "elapsed_seconds": elapsed_seconds,
+            "failure_samples": list(self.failure_samples),
+        }
