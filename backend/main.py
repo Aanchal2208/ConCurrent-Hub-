@@ -1,156 +1,205 @@
 
+
 from __future__ import annotations
 
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Optional
+from pathlib import Path
+from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
+from backend.auth import UserRepository
 from backend.routes import router as api_router
-from backend.services import TaskRepositoryProtocol, TaskService
-from database.postgres_db import PostgresPoolManager
+from backend.services import TaskService
+from database.postgres_db import DatabaseUnavailableError, PostgresPoolManager
 from database.repository import PostgresTaskRepository
 from realtime.connection_manager import ConnectionManager
-from realtime.websocket_server import create_websocket_router
 from resource_pool.object_pool import BoundedObjectPool, ReusableUpdateBuffer
-from scheduler.scheduler import InMemoryTaskStore, PerRecordScheduler
+from scheduler.scheduler import PerRecordScheduler
 
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+)
 logger = logging.getLogger("concurrenthub")
 
 
-def create_app(
-    repository: Optional[TaskRepositoryProtocol] = None,
-    scheduler: Optional[PerRecordScheduler] = None,
-    use_in_memory_db: Optional[bool] = None,
-) -> FastAPI:
-    connection_manager = ConnectionManager()
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    logger.info("Starting ConcurrentHub...")
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        pool_manager: Optional[PostgresPoolManager] = None
-        env_mode = os.getenv("DB_MODE", "auto").strip().lower()
-        force_memory = (
-            use_in_memory_db
-            if use_in_memory_db is not None
-            else env_mode in ("memory", "mock", "demo")
-        )
+    pg_pool = getattr(app.state, "pg_pool", None)
+    if pg_pool is None:
+        pg_pool = PostgresPoolManager()
+        app.state.pg_pool = pg_pool
 
-        active_repo: TaskRepositoryProtocol
-        storage_backend: str
-        persisted_in_pg: bool
-        db_pool_stats_fn = None
+    task_repo = getattr(app.state, "task_repo", None)
+    if task_repo is None:
+        task_repo = PostgresTaskRepository(pg_pool)
+        app.state.task_repo = task_repo
 
-        if repository is not None:
-            active_repo = repository
-            storage_backend = "injected_custom_repository"
-            persisted_in_pg = isinstance(repository, PostgresTaskRepository)
+    user_repo = getattr(app.state, "user_repo", None)
+    if user_repo is None:
+        user_repo = UserRepository(pg_pool)
+        app.state.user_repo = user_repo
 
-        elif force_memory:
-            active_repo = InMemoryTaskStore()
-            storage_backend = "in_memory_demo"
-            persisted_in_pg = False
+    try:
+        if not pg_pool.check_connectivity():
             logger.warning(
-                "Starting ConcurrentHub in EXPLICIT IN-MEMORY DEMO MODE. "
-                "Writes are stored in RAM only and are NOT persisted in PostgreSQL."
+                "PostgreSQL is not reachable at startup; starting in degraded mode. "
+                "API requests will return 503 until the database becomes available."
             )
+    except DatabaseUnavailableError as exc:
+        logger.warning("PostgreSQL unavailable during startup: %s", exc)
+    except Exception as exc:
+        logger.warning("Unexpected PostgreSQL startup check error: %s", exc)
 
-        else:
-            candidate_pool = PostgresPoolManager(open_immediately=False)
+    try:
+        task_repo.init_schema()
+        logger.info("Task schema initialized.")
+    except Exception as exc:
+        logger.warning("Task schema initialization skipped because PostgreSQL is unavailable: %s", exc)
 
-            if candidate_pool.check_connectivity():
-                candidate_pool.open()
-                pg_repo = PostgresTaskRepository(candidate_pool)
-                pg_repo.init_schema()
+    try:
+        user_repo.init_schema()
+        logger.info("User schema initialized.")
+    except Exception as exc:
+        logger.warning("User schema initialization skipped because PostgreSQL is unavailable: %s", exc)
 
-                pool_manager = candidate_pool
-                active_repo = pg_repo
-                storage_backend = "postgres"
-                persisted_in_pg = True
-                db_pool_stats_fn = candidate_pool.get_pool_stats
-
-                logger.info(
-                    "Connected to PostgreSQL (%s). Schema verified and connection pool active.",
-                    candidate_pool.conninfo,
-                )
-
-            elif env_mode == "postgres_strict":
-                candidate_pool.close()
-                raise RuntimeError(
-                    f"DB_MODE=postgres_strict and PostgreSQL is unreachable at {candidate_pool.conninfo}"
-                )
-
-            else:
-                candidate_pool.close()
-                active_repo = InMemoryTaskStore()
-                storage_backend = "in_memory_demo"
-                persisted_in_pg = False
-
-                logger.warning(
-                    "PostgreSQL is unreachable at %s. Falling back to IN-MEMORY DEMO MODE "
-                    "(persisted_in_postgresql=False). Start PostgreSQL via `docker compose up -d postgres` "
-                    "for persistent ACID storage.",
-                    candidate_pool.conninfo,
-                )
-
-        obj_pool: BoundedObjectPool[ReusableUpdateBuffer] = BoundedObjectPool(
-            capacity=int(os.getenv("OBJECT_POOL_CAPACITY", "64")),
-            preallocate=True,
-        )
-
-        task_service = TaskService(
-            repository=active_repo,
-            scheduler=scheduler,
-            object_pool=obj_pool,
-            connection_manager=connection_manager,
-            storage_backend=storage_backend,
-            persisted_in_postgresql=persisted_in_pg,
-            db_pool_stats_fn=db_pool_stats_fn,
-        )
-
-        app.state.task_service = task_service
+    connection_manager = getattr(app.state, "connection_manager", None)
+    if connection_manager is None:
+        connection_manager = ConnectionManager()
         app.state.connection_manager = connection_manager
 
-        try:
-            yield
-        finally:
-            task_service.close()
-            if pool_manager is not None:
-                pool_manager.close()
+    object_pool = getattr(app.state, "object_pool", None)
+    if object_pool is None:
+        object_pool = BoundedObjectPool(capacity=32, preallocate=True)
+        app.state.object_pool = object_pool
 
-    app = FastAPI(
-        title="ConcurrentHub Phase 2 — Collaborative Task Backend",
-        description=(
-            "OS & DBMS Project (OSDBMS-V-2026-T185, Team Nexus). "
-            "Coordinates concurrent record updates through an application-level "
-            "per-record FIFO scheduler, a BareHeap-inspired object pool, "
-            "PostgreSQL optimistic concurrency control, and real-time WebSockets."
-        ),
-        version="2.0.0",
-        lifespan=lifespan,
+    task_service = getattr(app.state, "task_service", None)
+    if task_service is None:
+        task_service = TaskService(
+            repository=task_repo,
+            object_pool=object_pool,
+            connection_manager=connection_manager,
+            storage_backend="postgres",
+            persisted_in_postgresql=True,
+            db_pool_stats_fn=pg_pool.get_pool_stats,
+            scheduler_workers=pg_pool.max_size,
+        )
+        app.state.task_service = task_service
+
+    logger.info(
+        "ConcurrentHub ready. Storage=postgres, PoolCapacity=%d, DB_available=%s",
+        object_pool.capacity,
+        pg_pool.check_connectivity(),
     )
 
-    @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=422,
-            content={
-                "status": "VALIDATION_ERROR",
-                "message": "Invalid request payload",
-                "details": jsonable_encoder(exc.errors()),
-            },
+    yield
+
+    logger.info("Shutting down ConcurrentHub...")
+    task_service.close()
+    pg_pool.close()
+    logger.info("Shutdown complete.")
+
+
+def create_app() -> FastAPI:
+    application = FastAPI(
+        title="ConcurrentHub",
+        description=(
+            "Multi-user collaborative task management with workload-aware per-record "
+            "scheduling, optimistic concurrency control, object pooling, PostgreSQL "
+            "persistence, and real-time WebSocket broadcasts. "
+            "OS & DBMS Project — Team Nexus (OSDBMS-V-2026-T185)"
+        ),
+        version="3.0.0",
+        lifespan=lifespan,
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
+    )
+
+    pg_pool = PostgresPoolManager()
+    task_repo = PostgresTaskRepository(pg_pool)
+    user_repo = UserRepository(pg_pool)
+    connection_manager = ConnectionManager()
+    object_pool = BoundedObjectPool(capacity=32, preallocate=True)
+    task_service = TaskService(
+        repository=task_repo,
+        object_pool=object_pool,
+        connection_manager=connection_manager,
+        storage_backend="postgres",
+        persisted_in_postgresql=True,
+        db_pool_stats_fn=pg_pool.get_pool_stats,
+        scheduler_workers=pg_pool.max_size,
+    )
+    application.state.pg_pool = pg_pool
+    application.state.task_repo = task_repo
+    application.state.user_repo = user_repo
+    application.state.connection_manager = connection_manager
+    application.state.object_pool = object_pool
+    application.state.task_service = task_service
+
+    # CORS — configure allowed origins from environment variable
+    raw_origins = os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:8000,http://127.0.0.1:8000,"
+        "http://localhost:5500,http://127.0.0.1:5500",
+    )
+    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if not allowed_origins:
+        allowed_origins = ["http://localhost:8000"]
+
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # REST API routes
+    application.include_router(api_router, prefix="")
+
+    # WebSocket endpoint
+    @application.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        manager: ConnectionManager = getattr(application.state, "connection_manager", None)
+        if manager is None:
+            await websocket.close(code=1011)
+            return
+        await manager.connect(websocket)
+        try:
+            while True:
+                msg = await websocket.receive_text()
+                if msg.strip().lower() == "ping":
+                    await websocket.send_json({"event": "pong"})
+        except Exception:
+            await manager.disconnect(websocket)
+
+    # Static frontend — mount AFTER all API routes so /ws and /api/* win
+    base_dir = PROJECT_ROOT
+    frontend_dir = base_dir / "frontend"
+    if frontend_dir.exists():
+        application.mount(
+            "/",
+            StaticFiles(directory=str(frontend_dir), html=True),
+            name="frontend",
         )
+    else:
+        logger.warning("frontend/ directory not found — no static files served.")
 
-    app.include_router(api_router)
-    app.include_router(create_websocket_router(connection_manager))
-
-    return app
+    return application
 
 
 app = create_app()
