@@ -335,3 +335,560 @@ class BackendRssSampler:
             raise BenchmarkError("No backend RSS samples were collected.")
         return max(self._samples)
 
+
+def _validate_payload(response: HttpResponse) -> Optional[dict[str, Any]]:
+    if response.status != 200 or not isinstance(response.payload, dict):
+        return None
+    task_id = response.payload.get("id")
+    version = response.payload.get("version")
+    if not isinstance(task_id, int) or not isinstance(version, int):
+        return None
+    return response.payload
+
+
+def _measure_api_get(client: ApiClient, task_id: int, metrics: Metrics) -> Optional[dict[str, Any]]:
+    response = client.request("GET", client.task_path(task_id))
+    task = _validate_payload(response)
+    detail = None
+    if task is None:
+        detail = response.error or f"GET {client.task_path(task_id)} returned HTTP {response.status} or an invalid task body"
+    metrics.record("ok" if task else "fail", response.elapsed_ms, detail)
+    return task
+
+
+def _measure_direct_get(repository: PostgresTaskRepository, task_id: int, metrics: Metrics) -> Optional[dict[str, Any]]:
+    started = time.perf_counter()
+    try:
+        task = repository.get_task(task_id)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        metrics.record("ok" if task is not None else "fail", elapsed_ms, None if task is not None else f"Task {task_id} was not found")
+        return task
+    except Exception as exc:
+        metrics.record("fail", (time.perf_counter() - started) * 1000, str(exc))
+        return None
+
+
+def _measure_update(
+    mode: str,
+    client: ApiClient,
+    repository: PostgresTaskRepository,
+    task_id: int,
+    expected_version: int,
+    title: str,
+    username: str,
+    metrics: Metrics,
+) -> None:
+    if mode == "Scheduler-Enabled":
+        response = client.request(
+            "PUT",
+            client.task_path(task_id),
+            {"expected_version": expected_version, "title": title},
+        )
+        if response.status == 200 and isinstance(response.payload, dict) and response.payload.get("status") == UpdateStatus.SUCCESS:
+            metrics.record("ok", response.elapsed_ms)
+        elif response.status == 409 and isinstance(response.payload, dict) and response.payload.get("status") == UpdateStatus.VERSION_CONFLICT:
+            metrics.record("conf", response.elapsed_ms)
+        else:
+            detail = response.error or f"PUT {client.task_path(task_id)} returned HTTP {response.status}: {response.payload!r}"
+            metrics.record("fail", response.elapsed_ms, detail)
+        return
+
+    started = time.perf_counter()
+    try:
+        result = repository.update_task(
+            task_id=task_id,
+            expected_version=expected_version,
+            title=title,
+            user_id=username,
+        )
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if result.status == UpdateStatus.SUCCESS:
+            metrics.record("ok", elapsed_ms)
+        elif result.status == UpdateStatus.VERSION_CONFLICT:
+            metrics.record("conf", elapsed_ms)
+        else:
+            metrics.record("fail", elapsed_ms, result.message)
+    except Exception as exc:
+        metrics.record("fail", (time.perf_counter() - started) * 1000, str(exc))
+
+
+def _run_case(
+    workload: str,
+    mode: str,
+    vus: int,
+    iterations: int,
+    run_id: str,
+    username: str,
+    client: ApiClient,
+    repository: PostgresTaskRepository,
+    personal_task_ids: list[int],
+    shared_task_id: int,
+    rss_sampler: BackendRssSampler,
+    timeout: float,
+) -> dict[str, Any]:
+    metrics = Metrics()
+    barrier = threading.Barrier(vus) if workload != "low_contention" else None
+    rss_sampler.start()
+    started = time.perf_counter()
+
+    def virtual_user(user_index: int) -> None:
+        for iteration in range(iterations):
+            contended = operation_is_contended(workload, iteration)
+            task_id = shared_task_id if contended else personal_task_ids[user_index]
+            if mode == "Scheduler-Enabled":
+                task = _measure_api_get(client, task_id, metrics)
+            else:
+                task = _measure_direct_get(repository, task_id, metrics)
+
+            if contended and barrier is not None:
+                barrier.wait(timeout=max(timeout * 2, 10.0))
+            if task is None:
+                continue
+
+            title = f"bench-{run_id[:8]}-{user_index}-{iteration}"
+            _measure_update(
+                mode,
+                client,
+                repository,
+                task_id,
+                int(task["version"]),
+                title,
+                username,
+                metrics,
+            )
+
+    try:
+        with ThreadPoolExecutor(max_workers=vus, thread_name_prefix="benchmark-vu") as executor:
+            futures = [executor.submit(virtual_user, index) for index in range(vus)]
+            for future in futures:
+                future.result()
+    except threading.BrokenBarrierError as exc:
+        raise BenchmarkError(f"{workload}/{mode}: contention synchronization failed: {exc}") from exc
+    finally:
+        elapsed_seconds = time.perf_counter() - started
+        rss_mb = rss_sampler.stop()
+        client.close_thread_clients()
+
+    result = metrics.snapshot(elapsed_seconds, rss_mb)
+    result.update({
+        "workload": workload,
+        "mode": mode,
+        "vus": vus,
+        "iterations_per_vu": iterations,
+    })
+    return result
+
+
+def _timing_delta(before: Any, after: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return {}
+    delta: dict[str, dict[str, Any]] = {}
+    for name, end in after.items():
+        start = before.get(name, {})
+        if not isinstance(start, dict) or not isinstance(end, dict):
+            continue
+        count = int(end.get("count", 0)) - int(start.get("count", 0))
+        total_ms = float(end.get("total_ms", 0.0)) - float(start.get("total_ms", 0.0))
+        if count > 0:
+            delta[name] = {
+                "count": count,
+                "total_ms": total_ms,
+                "average_ms": total_ms / count,
+            }
+    return delta
+
+
+def _health_timings(health: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(health, dict):
+        return {}, {}
+    scheduler = health.get("scheduler")
+    database = health.get("database_pool")
+    scheduler_timings = scheduler.get("timings", {}) if isinstance(scheduler, dict) else {}
+    database_timings = database.get("timings", {}) if isinstance(database, dict) else {}
+    return scheduler_timings, database_timings
+
+
+def _create_task(client: ApiClient, title: str, username: str) -> int:
+    payload = client.require(
+        "POST",
+        client.tasks_path,
+        201,
+        {"title": title, "description": "Temporary ConcurrentHub benchmark record", "assignee": username},
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("id"), int):
+        raise BenchmarkError("Task creation response did not contain an integer task ID.")
+    return payload["id"]
+
+
+def _cleanup_tasks(
+    task_ids: set[int],
+    username: str,
+    repository: PostgresTaskRepository,
+) -> tuple[set[int], list[str]]:
+    cleaned: set[int] = set()
+    errors: list[str] = []
+    for task_id in sorted(task_ids):
+        try:
+            record = repository.get_task(task_id)
+            if record is None:
+                cleaned.add(task_id)
+                continue
+            result = repository.delete_task(
+                task_id=task_id,
+                expected_version=int(record["version"]),
+                user_id=username,
+            )
+            if result.get("status") == UpdateStatus.SUCCESS:
+                cleaned.add(task_id)
+            else:
+                errors.append(f"task {task_id}: {result.get('status', 'unknown status')}")
+        except Exception as exc:
+            errors.append(f"task {task_id}: {exc}")
+    return cleaned, errors
+
+
+def _deactivate_account(
+    username: str,
+    email: str,
+    full_name: str,
+    pool_manager: PostgresPoolManager,
+) -> list[str]:
+    errors: list[str] = []
+    try:
+        with pool_manager.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM sessions WHERE username = %s", (username,))
+                cursor.execute(
+                    "UPDATE users SET is_active = FALSE "
+                    "WHERE username = %s AND email = %s AND full_name = %s",
+                    (username, email, full_name),
+                )
+    except Exception as exc:
+        errors.append(f"benchmark account cleanup: {exc}")
+    return errors
+
+
+def _pool_config(health_payload: Any, pool_manager: PostgresPoolManager) -> dict[str, Any]:
+    if not isinstance(health_payload, dict):
+        raise BenchmarkError("Health endpoint returned an invalid response.")
+    if health_payload.get("storage_backend") != "postgres" or health_payload.get("persisted_in_postgresql") is not True:
+        raise BenchmarkError("The API does not report PostgreSQL as its active persistent storage backend.")
+    api_pool = health_payload.get("database_pool")
+    if not isinstance(api_pool, dict) or not api_pool.get("is_open"):
+        raise BenchmarkError("The API PostgreSQL connection pool is not open.")
+    actual = {
+        "min_size": api_pool.get("min_size"),
+        "max_size": api_pool.get("max_size"),
+        "timeout_seconds": api_pool.get("timeout_seconds"),
+    }
+    expected = {
+        "min_size": pool_manager.min_size,
+        "max_size": pool_manager.max_size,
+        "timeout_seconds": pool_manager.timeout,
+    }
+    if actual != expected:
+        raise BenchmarkError(
+            f"Direct benchmark pool config {expected!r} differs from API pool config {actual!r}."
+        )
+    return actual
+
+
+def _write_results(
+    output_dir: Path,
+    run_id: str,
+    report: dict[str, Any],
+) -> tuple[Path, Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / f"{run_id}.csv"
+    json_path = output_dir / f"{run_id}.json"
+    txt_path = output_dir / f"{run_id}.txt"
+
+    with csv_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        for result in report["results"]:
+            row = {key: result.get(key) for key in CSV_FIELDS}
+            for key in ("scheduler_timing_ms", "database_timing_ms"):
+                row[key] = json.dumps(result.get(key, {}), sort_keys=True)
+            writer.writerow(row)
+    json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    lines = [
+        "ConcurrentHub - Comparative Performance Benchmark Suite",
+        f"Status: {report['status']}",
+        f"Storage Backend: {report.get('storage_backend', 'unverified')}",
+        f"DB Connection Pool Config: {report.get('db_pool_config', 'unavailable')}",
+        f"Base URL: {report['config']['base_url']}",
+        f"Iterations per VU per workload/mode: {report['config']['iterations']}",
+        "",
+        "Workload | Mode | VUs | Done | OK | Conf | Fail | Req/s | OK/s | P50(ms) | P95(ms) | P99(ms) | RSS(MB)",
+    ]
+    for row in report["results"]:
+        lines.append(
+            f"{row['workload']} | {row['mode']} | {row['vus']} | {row['done']} | {row['ok']} | "
+            f"{row['conf']} | {row['fail']} | {row['req_per_sec']:.2f} | "
+            f"{row['successful_ops_per_sec']:.2f} | {row['p50_ms']:.2f} | "
+            f"{row['p95_ms']:.2f} | {row['p99_ms']:.2f} | "
+            f"{row['rss_mb']:.2f}"
+        )
+        lines.append(f"  Scheduler timings (ms): {json.dumps(row.get('scheduler_timing_ms', {}), sort_keys=True)}")
+        lines.append(f"  Database timings (ms): {json.dumps(row.get('database_timing_ms', {}), sort_keys=True)}")
+    if report.get("error"):
+        lines.extend(("", f"Error: {report['error']}"))
+    if report.get("cleanup_errors"):
+        lines.extend(("", "Cleanup errors:"))
+        lines.extend(f"- {item}" for item in report["cleanup_errors"])
+    lines.extend(("", f"Backend listener PID(s): {report.get('backend_pids', [])}"))
+    txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return csv_path, json_path, txt_path
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return parsed
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Compare ConcurrentHub's direct PostgreSQL repository path with its real scheduler API path."
+    )
+    parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--vus", nargs="+", type=positive_int, default=[10, 50, 100])
+    parser.add_argument("--iterations", type=positive_int, default=100, help="update cycles per VU in each workload/mode")
+    parser.add_argument("--timeout", type=float, default=15.0, help="HTTP and contention barrier timeout in seconds")
+    parser.add_argument("--sample-interval", type=float, default=0.1, help="backend RSS sampling interval in seconds")
+    parser.add_argument("--health-path", default="/health")
+    parser.add_argument("--register-path", default="/auth/register")
+    parser.add_argument("--login-path", default="/auth/login")
+    parser.add_argument("--tasks-path", default="/tasks")
+    parser.add_argument("--task-path-template", default="/tasks/{task_id}")
+    return parser
+
+
+def run(args: argparse.Namespace) -> dict[str, Any]:
+    run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = f"concurrenthub-benchmark-{run_stamp}-{uuid.uuid4().hex[:8]}"
+    report: dict[str, Any] = {
+        "run_id": run_id,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "failed",
+        "storage_backend": "unverified",
+        "db_pool_config": None,
+        "backend_pids": [],
+        "config": {
+            "base_url": args.base_url,
+            "vus": args.vus,
+            "iterations": args.iterations,
+            "timeout_seconds": args.timeout,
+            "rss_sample_interval_seconds": args.sample_interval,
+            "health_path": args.health_path,
+            "register_path": args.register_path,
+            "login_path": args.login_path,
+            "tasks_path": args.tasks_path,
+            "task_path_template": args.task_path_template,
+        },
+        "workloads": {
+            "low_contention": "Each VU updates its own task.",
+            "high_contention": "All VUs update one shared task using the version read before a synchronized update wave.",
+            "mixed_workload": "Even iterations target one shared task; odd iterations target each VU's own task.",
+        },
+        "metric_definitions": {
+            "done": "Completed HTTP or repository-call attempts, including attempts ending in errors.",
+            "ok": "Successful task reads and updates.",
+            "conf": "Expected VERSION_CONFLICT outcomes from task updates only.",
+            "fail": "Unexpected status, invalid response, repository error, or transport failure.",
+            "req_per_sec": "Done divided by total wall-clock benchmark duration; GET and update calls are counted separately.",
+            "successful_ops_per_sec": "Successful task reads and updates divided by total wall-clock benchmark duration.",
+            "latency_percentiles": "Linear-interpolated percentiles across individual GET and update call latencies.",
+            "stage_timings": "Per-case deltas of bounded scheduler and PostgreSQL pool timing aggregates; average_ms is total_ms/count.",
+            "rss_mb": "Peak sampled RSS in MiB for Python process(es) listening on the configured API port; benchmark runner RSS is excluded.",
+        },
+        "results": [],
+        "cleanup_errors": [],
+        "error": None,
+    }
+    pool_manager: Optional[PostgresPoolManager] = None
+    repository: Optional[PostgresTaskRepository] = None
+    client: Optional[ApiClient] = None
+    run_user = ""
+    run_email = ""
+    run_full_name = "ConcurrentHub load benchmark"
+    all_task_ids: set[int] = set()
+    account_creation_attempted = False
+
+    try:
+        _, port = validate_local_base_url(args.base_url)
+        if args.timeout <= 0 or args.sample_interval <= 0:
+            raise BenchmarkError("Timeout and RSS sample interval must be greater than zero.")
+        if any(vus > 500 for vus in args.vus):
+            raise BenchmarkError("This benchmark caps concurrency at 500 VUs per workload.")
+        if args.iterations > 10000:
+            raise BenchmarkError("This benchmark caps iterations at 10,000 per VU.")
+        client = ApiClient(
+            args.base_url,
+            args.timeout,
+            args.health_path,
+            args.register_path,
+            args.login_path,
+            args.tasks_path,
+            args.task_path_template,
+        )
+        health = client.require("GET", args.health_path, 200)
+        if not isinstance(health, dict) or health.get("status") != "ok":
+            raise BenchmarkError("ConcurrentHub health endpoint did not report status=ok.")
+
+        pool_manager = PostgresPoolManager(open_immediately=True)
+        repository = PostgresTaskRepository(pool_manager)
+        if not pool_manager.check_connectivity():
+            raise BenchmarkError("Direct PostgreSQL connectivity check failed; no valid comparison can be run.")
+        report["db_pool_config"] = _pool_config(health, pool_manager)
+        report["storage_backend"] = health["storage_backend"]
+
+        rss_sampler = BackendRssSampler(port, args.sample_interval)
+        report["backend_pids"] = rss_sampler.root_pids
+
+        run_user = f"loadbench_{uuid.uuid4().hex[:16]}"
+        run_email = f"{run_user}@example.test"
+        password = secrets.token_urlsafe(24)
+        account_creation_attempted = True
+        client.require(
+            "POST",
+            args.register_path,
+            201,
+            {"username": run_user, "password": password, "email": run_email, "full_name": run_full_name, "role": "editor"},
+        )
+        login = client.require(
+            "POST",
+            args.login_path,
+            200,
+            {"username": run_user, "password": password},
+        )
+        if not isinstance(login, dict) or not isinstance(login.get("access_token"), str):
+            raise BenchmarkError("Login response did not include an access token.")
+        client.token = login["access_token"]
+
+        marker_id = _create_task(client, f"benchmark-preflight-{run_id}", run_user)
+        all_task_ids.add(marker_id)
+        marker = repository.get_task(marker_id)
+        if not marker or marker.get("title") != f"benchmark-preflight-{run_id}":
+            raise BenchmarkError(
+                "The task created through the API was not visible through the direct PostgreSQL repository. "
+                "The API and direct baseline do not share the same database."
+            )
+        result = repository.delete_task(marker_id, int(marker["version"]), run_user)
+        if result.get("status") != UpdateStatus.SUCCESS:
+            raise BenchmarkError(f"Could not remove database identity preflight task {marker_id}.")
+        all_task_ids.remove(marker_id)
+
+        for vus in args.vus:
+            for workload in WORKLOADS:
+                for mode in MODES:
+                    case_tasks: set[int] = set()
+                    shared_id = _create_task(
+                        client,
+                        f"benchmark-{run_id[-8:]}-{workload}-{mode[:3]}-shared",
+                        run_user,
+                    )
+                    case_tasks.add(shared_id)
+                    all_task_ids.add(shared_id)
+                    personal_ids: list[int] = []
+                    for index in range(vus):
+                        task_id = _create_task(
+                            client,
+                            f"benchmark-{run_id[-8:]}-{workload}-{index}",
+                            run_user,
+                        )
+                        personal_ids.append(task_id)
+                        case_tasks.add(task_id)
+                        all_task_ids.add(task_id)
+                    if mode == "Scheduler-Enabled":
+                        timing_health_before = client.require("GET", args.health_path, 200)
+                        scheduler_before, database_before = _health_timings(timing_health_before)
+                    else:
+                        scheduler_before = {}
+                        database_before = pool_manager.get_pool_stats().get("timings", {})
+                    result = _run_case(
+                        workload,
+                        mode,
+                        vus,
+                        args.iterations,
+                        run_id,
+                        run_user,
+                        client,
+                        repository,
+                        personal_ids,
+                        shared_id,
+                        rss_sampler,
+                        args.timeout,
+                    )
+                    if mode == "Scheduler-Enabled":
+                        timing_health_after = client.require("GET", args.health_path, 200)
+                        scheduler_after, database_after = _health_timings(timing_health_after)
+                        result["scheduler_timing_ms"] = _timing_delta(
+                            scheduler_before, scheduler_after
+                        )
+                        result["database_timing_ms"] = _timing_delta(
+                            database_before, database_after
+                        )
+                    else:
+                        result["scheduler_timing_ms"] = {}
+                        result["database_timing_ms"] = _timing_delta(
+                            database_before, pool_manager.get_pool_stats().get("timings", {})
+                        )
+                    report["results"].append(result)
+                    report["backend_pids"] = sorted(rss_sampler.pids)
+                    cleaned, cleanup = _cleanup_tasks(case_tasks, run_user, repository)
+                    report["cleanup_errors"].extend(cleanup)
+                    all_task_ids.difference_update(cleaned)
+                    if cleanup:
+                        raise BenchmarkError(f"Failed to clean up benchmark records: {cleanup!r}")
+
+        if not pool_manager.check_connectivity():
+            raise BenchmarkError("Post-run PostgreSQL connectivity check failed.")
+        final_health = client.require("GET", args.health_path, 200)
+        _pool_config(final_health, pool_manager)
+        report["status"] = "completed"
+    except Exception as exc:
+        report["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        if pool_manager and repository and account_creation_attempted:
+            cleaned, cleanup_errors = _cleanup_tasks(all_task_ids, run_user, repository)
+            all_task_ids.difference_update(cleaned)
+            report["cleanup_errors"].extend(cleanup_errors)
+            if not all_task_ids:
+                report["cleanup_errors"].extend(
+                    _deactivate_account(run_user, run_email, run_full_name, pool_manager)
+                )
+            else:
+                report["cleanup_errors"].append(
+                    "Benchmark account left active because one or more test tasks could not be removed."
+                )
+        if report["cleanup_errors"]:
+            report["status"] = "failed"
+        if pool_manager:
+            pool_manager.close()
+        if client:
+            client.close_thread_clients()
+        report["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    return report
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    output_dir = Path(__file__).resolve().parent / "results"
+    report = run(args)
+    paths = _write_results(output_dir, report["run_id"], report)
+    print()
+    print(paths[2].read_text(encoding="utf-8"))
+    print("Saved results:")
+    print(f"  CSV:  {paths[0]}")
+    print(f"  JSON: {paths[1]}")
+    print(f"  TXT:  {paths[2]}")
+    return 0 if report["status"] == "completed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
