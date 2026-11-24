@@ -187,3 +187,9 @@ def percentile(sorted_values: list[float], quantile: float) -> Optional[float]:
     return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * fraction
 
 
+def operation_is_contended(workload: str, iteration: int) -> bool:
+    if workload == "high_contention":
+        return True
+    return workload == "mixed_workload" and iteration % 2 == 0
+
+
