@@ -193,3 +193,33 @@ def operation_is_contended(workload: str, iteration: int) -> bool:
     return workload == "mixed_workload" and iteration % 2 == 0
 
 
+def validate_local_base_url(base_url: str) -> tuple[str, int]:
+    parsed = urllib.parse.urlsplit(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise BenchmarkError("Base URL must be an absolute http:// or https:// URL.")
+    if parsed.username or parsed.password:
+        raise BenchmarkError("Do not put credentials in the base URL.")
+
+    host = parsed.hostname
+    local_addresses = {"127.0.0.1", "::1"}
+    for addresses in psutil.net_if_addrs().values():
+        for address in addresses:
+            if address.family in (socket.AF_INET, socket.AF_INET6):
+                local_addresses.add(address.address.split("%", 1)[0])
+    try:
+        resolved = {
+            str(item[4][0]).split("%", 1)[0]
+            for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+        }
+    except socket.gaierror as exc:
+        raise BenchmarkError(f"Could not resolve base URL host {host!r}: {exc}") from exc
+
+    is_loopback_name = host.lower() == "localhost"
+    is_local_ip = bool(resolved.intersection(local_addresses))
+    if not is_loopback_name and not is_local_ip:
+        raise BenchmarkError(
+            "This suite measures the local backend process RSS and refuses non-local hosts. "
+            "Run it on the machine hosting ConcurrentHub."
+        )
+    return host, parsed.port or (443 if parsed.scheme == "https" else 80)
+
