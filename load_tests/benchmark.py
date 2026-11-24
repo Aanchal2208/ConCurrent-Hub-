@@ -176,3 +176,14 @@ class Metrics:
             "elapsed_seconds": elapsed_seconds,
             "failure_samples": list(self.failure_samples),
         }
+
+def percentile(sorted_values: list[float], quantile: float) -> Optional[float]:
+    if not sorted_values:
+        return None
+    index = (len(sorted_values) - 1) * quantile
+    lower = int(index)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    fraction = index - lower
+    return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * fraction
+
+
