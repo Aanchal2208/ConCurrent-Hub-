@@ -223,3 +223,115 @@ def validate_local_base_url(base_url: str) -> tuple[str, int]:
         )
     return host, parsed.port or (443 if parsed.scheme == "https" else 80)
 
+
+class BackendRssSampler:
+    def __init__(self, port: int, interval_seconds: float) -> None:
+        self.port = port
+        self.interval_seconds = interval_seconds
+        self.root_pids = self._find_listener_pids(port)
+        self.pids: set[int] = set()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._error: Optional[str] = None
+        self._samples: list[float] = []
+
+    @staticmethod
+    def _find_listener_pids(port: int) -> list[int]:
+        try:
+            connections = psutil.net_connections(kind="inet")
+        except (psutil.AccessDenied, OSError) as exc:
+            raise BenchmarkError(
+                f"Cannot inspect local listening processes for RSS measurement: {exc}"
+            ) from exc
+        pids = sorted({
+            connection.pid
+            for connection in connections
+            if connection.status == psutil.CONN_LISTEN
+            and connection.laddr
+            and connection.laddr.port == port
+            and connection.pid is not None
+        })
+        if not pids:
+            raise BenchmarkError(
+                f"No local process is listening on port {port}; start the ConcurrentHub backend first."
+            )
+        non_python: list[str] = []
+        for pid in pids:
+            try:
+                name = psutil.Process(pid).name().lower()
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+                raise BenchmarkError(f"Cannot inspect backend listener PID {pid}: {exc}") from exc
+            if "python" not in name:
+                non_python.append(name)
+        if non_python:
+            raise BenchmarkError(
+                f"Port {port} is not served directly by a Python backend process: {non_python!r}."
+            )
+        return pids
+
+    def _process_tree_pids(self, refresh_if_missing: bool = True) -> list[int]:
+        live_roots: list[int] = []
+        discovered: set[int] = set()
+        for root_pid in self.root_pids:
+            try:
+                root = psutil.Process(root_pid)
+                root.name()
+                live_roots.append(root_pid)
+                discovered.add(root_pid)
+                for child in root.children(recursive=True):
+                    try:
+                        if "python" in child.name().lower():
+                            discovered.add(child.pid)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if not live_roots:
+            if not refresh_if_missing:
+                raise psutil.NoSuchProcess(self.root_pids[0] if self.root_pids else 0)
+            self.root_pids = self._find_listener_pids(self.port)
+            return self._process_tree_pids(refresh_if_missing=False)
+        self.pids.update(discovered)
+        return sorted(discovered)
+
+    def _sample(self) -> None:
+        for attempt in range(2):
+            try:
+                pids = self._process_tree_pids()
+                total_bytes = sum(psutil.Process(pid).memory_info().rss for pid in pids)
+                self._samples.append(total_bytes / (1024 * 1024))
+                return
+            except psutil.NoSuchProcess:
+                if attempt == 0:
+                    continue
+                self._error = "Backend process exited while sampling RSS."
+            except BenchmarkError as exc:
+                self._error = str(exc)
+                break
+            except (psutil.AccessDenied, OSError) as exc:
+                self._error = f"Unable to sample backend RSS: {exc}"
+                break
+        self._stop.set()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            self._sample()
+
+    def start(self) -> None:
+        self._sample()
+        if self._error:
+            raise BenchmarkError(self._error)
+        self._thread = threading.Thread(target=self._run, name="backend-rss-sampler", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> float:
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+        self._sample()
+        if self._error:
+            raise BenchmarkError(self._error)
+        if not self._samples:
+            raise BenchmarkError("No backend RSS samples were collected.")
+        return max(self._samples)
+
