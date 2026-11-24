@@ -282,4 +282,4 @@ def measure_pool_vs_allocation(iterations: int = 5000, capacity: int = 16) -> Di
         "pooled_objects_allocated": stats["allocated_objects"],
         "pooled_reused_acquisitions": stats["reused_acquisitions"],
         "unpooled_objects_created": iterations,
-    
+    }
